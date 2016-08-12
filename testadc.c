@@ -9,8 +9,7 @@
 #include <mcp3204.h>
 
 
-#define REPEAT_NUM 100
-#define SAMPLE_NUM 100
+#define REPEAT_NUM 10000
 
 #define PIN_BASE                 100
 
@@ -85,22 +84,26 @@ int main(void)
 	int sample;
 	unsigned sbuff[100];
 	const unsigned sbuff_sz = sizeof sbuff / sizeof sbuff[0];
+	double v;
 
 	wiringPiSetup();
     mcp3204Setup(ADC_CHAN_0, 0);
 
-	for (i = 0; i < REPEAT_NUM; i++) {
-		for (j = 0; j < SAMPLE_NUM; j++) {
-			double v;
-			//sample = analogRead(ADC_CHAN_0);
-			sample = aggregateSample3204(ADC_CHAN_0, sbuff, sbuff_sz, AGGREGATE_SAMPLE_AVG);
-			v = round(((double)sample / MCP3204_SAMPLE_MAX * VREF) * 100) / 100.0;
+	// Get a first approximation
+	sample = aggregateSample3204(ADC_CHAN_0, sbuff, sbuff_sz, AGGREGATE_SAMPLE_AVG);
 
-			if (v > MCP3204_SAMPLE_MAX)
-				v = MCP3204_SAMPLE_MAX;
+	v = round(((double)sample / MCP3204_SAMPLE_MAX * VREF) * 100) / 100.0;
 
-			printf("%.2f      %04x\n", v, sample);
-		}
+	// "Hold"
+	//for (i = 0; i < REPEAT_NUM; i++) {
+	for (;;) {
+		double v2, vt;
+		sample = analogRead(ADC_CHAN_0);
+		v2 = round(((double)sample / MCP3204_SAMPLE_MAX * VREF) * 100) / 100.0;
+		vt = v * 0.999 + v2 * 0.001;
+		//if (fabs(vt - v) > 0.0025)
+			v = vt;
+		printf("%.2f      %04x\n", v, sample);
 	}
 
 #if 1
