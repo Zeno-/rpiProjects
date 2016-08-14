@@ -91,6 +91,8 @@ unsigned aggregateSample3204(unsigned channel, unsigned *samples,
 		} else {
 			samples[index++] = sample;
 		}
+
+		delay(1);	// FIXME: Implement a proper timing system
 	}
 
 	if (result) {
@@ -118,28 +120,43 @@ unsigned aggregateSample3204(unsigned channel, unsigned *samples,
 int main(void)
 {
 	int sample;
-	unsigned sbuff[100];
+	int vcount = 0;
+	unsigned sbuff[200];
 	const unsigned sbuff_sz = sizeof sbuff / sizeof sbuff[0];
 	double v;
 
 	wiringPiSetup();
 	mcp3204Setup(ADC_CHAN_0, 0);
 
-	// Get a first approximation
-	sample = aggregateSample3204(ADC_CHAN_0, sbuff, NULL,
-					sbuff_sz, AGGREGATE_SAMPLE_AVG);
-
-	v = round(((double)sample / MCP3204_SAMPLE_MAX * VREF) * 100) / 100.0;
-
-	// "Hold"
 	for (;;) {
-		double v2;
-		sample = analogRead(ADC_CHAN_0);
-		v2 = round(((double)sample / MCP3204_SAMPLE_MAX * VREF) * 100) / 100.0;
-		v = v * 0.999 + v2 * 0.001;
-		printf("%.2f      %04x\n", v, sample);
-	}
+		// Get a first approximation
+		sample = aggregateSample3204(ADC_CHAN_0, sbuff, NULL,
+						sbuff_sz, AGGREGATE_SAMPLE_AVG);
 
+		v = round(((double)sample / MCP3204_SAMPLE_MAX * VREF) * 100) / 100.0;
+
+		// "Hold"
+		for (;;) {
+			double v2, vt;
+			sample = analogRead(ADC_CHAN_0);
+			v2 = round(((double)sample / MCP3204_SAMPLE_MAX * VREF) * 100) / 100.0;
+
+			/* Break the "hold" if there has been 5 samples with a 0.1V difference
+			 */
+			vt = fabs(v2 - v);
+			if (vt > 0.1)
+				vcount++;
+			else
+				vcount = 0;
+
+			if (vcount > 5)
+				break;
+
+			v = v * 0.999 + v2 * 0.001;
+			printf("%.2f      %04x\n", v, sample);
+			delay(1);	// FIXME: Implement a proper timing system
+		}
+	}
 #if 1
 	printf("Vref used: %.2f\n",  VREF);
 #endif
