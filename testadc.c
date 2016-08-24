@@ -22,6 +22,9 @@
 
 #define VREF                     4.096
 
+
+#define CONTINUOUS
+
 struct AggregateSampleData {
 	unsigned min, max, avg, median, mode;
 };
@@ -43,11 +46,11 @@ void aggregateSample3204(unsigned channel, unsigned *samples,
 {
 	unsigned i;
 	long min, max;
-	unsigned avg;
+	double avg;
 	unsigned middle = samples_n / 2;
 
 	min = MCP3204_SAMPLE_MAX + 1;
-	max = -1;
+	max = 0;
 
 	// precondition: samples_n >= 2
 
@@ -62,7 +65,7 @@ void aggregateSample3204(unsigned channel, unsigned *samples,
 
 		samples[i] = sample;
 
-		avg = avg * 0.99 + sample * 0.01;
+		avg += sample;
 
 		//printf("%04x\n", sample);
 
@@ -73,7 +76,7 @@ void aggregateSample3204(unsigned channel, unsigned *samples,
 
 	result->min = min;
 	result->max = max;
-	result->avg = avg;
+	result->avg = avg / samples_n;
 
 	if (samples_n & 0x01) { // If odd number
 		result->median = (samples[middle - 1] + samples[middle]) / 2;
@@ -90,7 +93,7 @@ int main(void)
 	unsigned sbuff[2048];
 	const unsigned sbuff_sz = sizeof sbuff / sizeof sbuff[0];
 	double v;
-	unsigned i;
+	unsigned i, nzvalues;
 	double var_sum;
 	double std_dev;
 
@@ -100,7 +103,7 @@ int main(void)
 	mcp3208Setup(ADC_CHAN_0, 0);
 
 
-#if 1
+#ifdef CONTINUOUS
 	for (;;) {
 #endif
 	aggregateSample3204(ADC_CHAN_0, sbuff, &as_result, sbuff_sz);
@@ -125,7 +128,13 @@ int main(void)
 		}
 	}
 
-#if 0
+	/* Count unique zon-zero values
+	 */
+	nzvalues = 0;
+	for (i = 0; i < sizeof hist / sizeof hist[0]; i++)
+		nzvalues += hist[i] != 0;
+
+#ifndef CONTINUOUS
 	v = round(((double)as_result.avg / MCP3204_SAMPLE_MAX * VREF) * 1000) / 1000.0;
 	printf("Volts (mean):              %.3f\n", v);
 
@@ -143,12 +152,22 @@ int main(void)
 
 	v = round(((std_dev / sqrt(sbuff_sz)) / MCP3204_SAMPLE_MAX * VREF) * 1000) / 1000.0;
 	printf("Volts (std err):           %.3f\n", v);
+
+	printf("Total samples:             %u\n", sbuff_sz);
+	printf("Unique values sampled:     %u\n", nzvalues);
+
+	v = round(((double)as_result.min / MCP3204_SAMPLE_MAX * VREF) * 1000) / 1000.0;
+	printf("    min:                   %.3f\n", v);
+
+	v = round(((double)as_result.max / MCP3204_SAMPLE_MAX * VREF) * 1000) / 1000.0;
+	printf("    max:                   %.3f\n", v);
+
 #else
 	v = round(( ((double)as_result.mode + as_result.median) / 2.0 / MCP3204_SAMPLE_MAX * VREF) * 1000) / 1000.0;
 	printf("Volts (mode/median avg):   %.3f\n", v);
 #endif
 
-#if 1
+#ifdef CONTINUOUS
 	}
 #endif
 
