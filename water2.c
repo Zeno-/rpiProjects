@@ -31,7 +31,8 @@
  **************************************************************************/
 
 struct AggregateSampleData {
-	unsigned min, max, avg, median, mode;
+	unsigned min, max;
+	double avg;
 };
 
 /**************************************************************************
@@ -44,6 +45,13 @@ void aggregateSample3204(unsigned channel, unsigned *samples,
 
 double round_decimal_places(double value, unsigned places);
 
+
+#ifdef VERBOSE_OUT
+static int cmp_unsigned(const void *a, const void *b);
+void printstats(unsigned *samples, const struct AggregateSampleData *result,
+                             unsigned samples_n);
+#endif
+
 /**************************************************************************
  **************************************************************************/
 
@@ -51,7 +59,6 @@ int main(void)
 {
 	double dark_volts_90, dark_volts_transmitted, light_volts;
 	double sample_volts, sample_90, sample_transmitted;
-	double c;
 
 	/* Setup wiringPi
 	 */
@@ -137,92 +144,16 @@ double takeSample(unsigned adc_channel)
 	struct AggregateSampleData as_result;
 	static unsigned sbuff[AGGREGATE_SAMPLE_REPEATS];
 	const unsigned sbuff_sz = sizeof sbuff / sizeof sbuff[0];
-	unsigned i;
-
-#ifdef VERBOSE_OUT
-	int vcount = 0;
-	double v;
-	double var_sum;
-	double std_dev;
-	unsigned j, nzvalues;
-#endif
-
-	unsigned hist[MCP3204_SAMPLE_MAX + 1];
 
 	aggregateSample3204(PIN_BASE + adc_channel, sbuff, &as_result, sbuff_sz);
 
-	memset(hist, 0, sizeof hist);
-
-	as_result.mode = 0;
-	for (i = 0; i < sizeof hist / sizeof hist[0]; i++) {
-		if (hist[i] != 0 && hist[i] > as_result.mode) {
-			as_result.mode = i;
-		}
-	}
-
 #ifdef VERBOSE_OUT
-
-	// Standard deviation
-	var_sum = 0;
-
-	for (i = 0; i < sbuff_sz; i++) {
-		long delta;
-		hist[sbuff[i]]++;
-		delta = sbuff[i] - as_result.avg;
-		var_sum += delta * delta;
-	}
-
-	std_dev = sqrt(var_sum / sbuff_sz);
-
-
-	/* Count unique zon-zero values
-	 */
-	nzvalues = 0;
-	for (i = 0; i < sizeof hist / sizeof hist[0]; i++)
-		nzvalues += hist[i] != 0;
-
-	v = (double)as_result.avg / MCP3204_SAMPLE_MAX * VREF;
-	printf("%% (mean):                  %.3f\n", v);
-
-	v = (double)as_result.median / MCP3204_SAMPLE_MAX * VREF;
-	printf("%% (median):                %.3f\n", v);
-
-	v = (double)as_result.mode / MCP3204_SAMPLE_MAX * VREF;
-	printf("%% (mode):                  %.3f\n", v);
-
-	v = ((double)as_result.mode + as_result.median) / 2.0 / MCP3204_SAMPLE_MAX * VREF;
-	printf("%% (mode/median avg):       %.3f\n", v);
-
-	v = std_dev / MCP3204_SAMPLE_MAX * VREF;
-	printf("%% (std dev):               %.3f\n", v);
-
-	v = (std_dev / sqrt(sbuff_sz)) / MCP3204_SAMPLE_MAX * VREF;
-	printf("%% (std err):               %.3f\n", v);
-
-	printf("Total samples:             %u\n", sbuff_sz);
-	printf("Unique values sampled:     %u\n", nzvalues);
-
-	v = (double)as_result.min / MCP3204_SAMPLE_MAX * VREF;
-	printf("    min:                   %.4f\n", v);
-
-	v = (double)as_result.max / MCP3204_SAMPLE_MAX * VREF;
-	printf("    max:                   %.4f\n", v);
+	printstats(sbuff, &as_result, sbuff_sz);
 #endif
 
-	return (double)as_result.median / MCP3204_SAMPLE_MAX * VREF;
+	return as_result.avg / MCP3204_SAMPLE_MAX * VREF;
 }
 
-
-
-static int cmp_unsigned(const void *a, const void *b)
-{
-	const unsigned *ua, *ub;
-
-	ua = a;
-	ub = b;
-
-	return *ua - *ub;
-}
 
 void aggregateSample3204(unsigned channel, unsigned *samples,
                              struct AggregateSampleData *result,
@@ -231,12 +162,9 @@ void aggregateSample3204(unsigned channel, unsigned *samples,
 	unsigned i;
 	long min, max;
 	double avg;
-	unsigned middle = samples_n / 2;
 
 	min = MCP3204_SAMPLE_MAX + 1;
 	max = 0;
-
-	// precondition: samples_n >= 2
 
 	avg = 0;
 	for (i = 0; i < samples_n; i++) {
@@ -254,20 +182,9 @@ void aggregateSample3204(unsigned channel, unsigned *samples,
 		delay(1);	// FIXME: Implement a proper timing system
 	}
 
-	// TODO: The median should be calculated by the calling function rather
-	// than done here especially since, unlike min, max and average, we cannot
-	// do it "inline" with taking the samples.
-	qsort(samples, samples_n, sizeof *samples, cmp_unsigned);
-
 	result->min = min;
 	result->max = max;
 	result->avg = avg / samples_n;
-
-	if (samples_n & 0x01) { // If odd number
-		result->median = (samples[middle - 1] + samples[middle]) / 2;
-	} else {
-		result->median = samples[middle];
-	}
 }
 
 double round_decimal_places(double value, unsigned places)
@@ -279,3 +196,95 @@ double round_decimal_places(double value, unsigned places)
 	return ceil(value * multiplier + 0.5) / multiplier;
 }
 
+#ifdef VERBOSE_OUT
+static int cmp_unsigned(const void *a, const void *b)
+{
+	const unsigned *ua, *ub;
+
+	ua = a;
+	ub = b;
+
+	return *ua - *ub;
+}
+
+void printstats(unsigned *samples, const struct AggregateSampleData *result,
+                             unsigned samples_n)
+{
+	double v;
+	double var_sum;
+	double std_dev, mode, median;
+	unsigned i, nzvalues;
+	unsigned hist[MCP3204_SAMPLE_MAX + 1];
+	unsigned middle = samples_n / 2;
+
+	/* Mode
+	 */
+	memset(hist, 0, sizeof hist);
+
+	/* Calc Standard deviation and build histogram
+	 */
+	var_sum = 0;
+
+	for (i = 0; i < samples_n; i++) {
+		long delta;
+		hist[samples[i]]++;
+		delta = samples[i] - result->avg;
+		var_sum += delta * delta;
+	}
+
+	std_dev = sqrt(var_sum / samples_n);
+
+	mode = 0;
+	for (i = 0; i < sizeof hist / sizeof hist[0]; i++) {
+		if (hist[i] != 0 && hist[i] > mode) {
+			mode = i;
+		}
+	}
+
+	/* Median
+	 */
+	// precondition: samples_n>= 2
+	qsort(samples, samples_n, sizeof *samples, cmp_unsigned);
+
+	if (samples_n & 0x01) { // If odd number
+		median = (samples[middle - 1] + samples[middle]) / 2.0;
+	} else {
+		median = samples[middle];
+	}
+
+
+	/* Count unique zon-zero values
+	 */
+	nzvalues = 0;
+	for (i = 0; i < sizeof hist / sizeof hist[0]; i++)
+		nzvalues += hist[i] != 0;
+
+	v = (double)result->avg / MCP3204_SAMPLE_MAX * VREF;
+	printf("Volts (mean):                  %.3f\n", v);
+
+	v = median / MCP3204_SAMPLE_MAX * VREF;
+	printf("Volts (median):                %.3f\n", v);
+
+	v = mode / MCP3204_SAMPLE_MAX * VREF;
+	printf("Volts (mode):                  %.3f\n", v);
+
+	v = (mode + median) / 2.0 / MCP3204_SAMPLE_MAX * VREF;
+	printf("Volts (mode/median avg):       %.3f\n", v);
+
+	v = std_dev / MCP3204_SAMPLE_MAX * VREF;
+	printf("Volts (std dev):               %.3f\n", v);
+
+	v = (std_dev / sqrt(samples_n)) / MCP3204_SAMPLE_MAX * VREF;
+	printf("Volts (std err):               %.3f\n", v);
+
+	printf("Total samples:             %u\n", samples_n);
+	printf("Unique values sampled:     %u\n", nzvalues);
+
+	v = (double)result->min / MCP3204_SAMPLE_MAX * VREF;
+	printf("    min:                   %.4f\n", v);
+
+	v = (double)result->max / MCP3204_SAMPLE_MAX * VREF;
+	printf("    max:                   %.4f\n", v);
+}
+
+#endif
